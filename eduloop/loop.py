@@ -4,6 +4,7 @@ import heapq
 import selectors
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import IntEnum
 from logging import getLogger, Logger
@@ -155,6 +156,22 @@ class Future:
         self._callbacks.clear()
 
 
+@contextmanager
+def _AsyncioCurrentTaskRegistrator(loop, task):
+    # asyncio's _enter_task/_leave_task are necessary to make asyncio.current_task() work. The following
+    # public API's depend on it:
+    #   • asyncio.current_task() directly.
+    #   • asyncio.timeout() and asyncio.timeout_at().
+    #   • asyncio.wait_for(), which uses the timeout machinery in current Python versions.
+    #   • asyncio.TaskGroup, which identifies its parent task.
+
+    asyncio._enter_task(loop, task)
+    try:
+        yield task
+    finally:
+        asyncio._leave_task(loop, task)
+
+
 class Task(Future):
     _coro: Any
     _must_cancel: bool = False
@@ -172,33 +189,45 @@ class Task(Future):
         raise RuntimeError('Task does not support set_exception operation')
 
     def cancel(self, msg=None):
+        if self.done():
+            return False
+
         self._must_cancel = True
         self._loop.call_soon(self._step) # _step will emit CancelledError into the coroutine
+        return True
+
+    def cancelling(self):
+        return int(self._must_cancel)
+
+    def uncancel(self):
+        self._must_cancel = False
+        return 0
 
     def _step(self, exc=None):
         if self.done():  # This can happen if we have both cancellation and wake up upon future completion
             return
 
-        try:
-            if self._must_cancel: # Keep emitting CancelledError() for simplicity, asyncio has a counter here instead
-                fut = self._coro.throw(asyncio.CancelledError())
-            elif exc is None:
-                fut = self._coro.send(None)
+        with _AsyncioCurrentTaskRegistrator(self._loop, self):
+            try:
+                if self._must_cancel: # Keep emitting CancelledError() for simplicity, asyncio has a counter here instead
+                    fut = self._coro.throw(asyncio.CancelledError())
+                elif exc is None:
+                    fut = self._coro.send(None)
+                else:
+                    fut = self._coro.throw(exc)
+            except StopIteration as ex:
+                super().set_result(ex.value)
+            except asyncio.CancelledError:
+                super().cancel()
+            except BaseException as ex:
+                super().set_exception(ex)
             else:
-                fut = self._coro.throw(exc)
-        except StopIteration as ex:
-            super().set_result(ex.value)
-        except asyncio.CancelledError:
-            super().cancel()
-        except BaseException as ex:
-            super().set_exception(ex)
-        else:
-            # fut can be None, this is an internal optimization in asyncio.sleep(0) to just skip one loop iteration
-            # without creating Future object.
-            if fut is not None:
-                fut.add_done_callback(self._wakeup)
-            else:
-                self._loop.call_soon(self._step)
+                # fut can be None, this is an internal optimization in asyncio.sleep(0) to just skip one loop iteration
+                # without creating Future object.
+                if fut is not None:
+                    fut.add_done_callback(self._wakeup)
+                else:
+                    self._loop.call_soon(self._step)
 
     def _wakeup(self, future):
         try:

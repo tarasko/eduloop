@@ -13,5 +13,3 @@ Transport/Protocol + Streams + sock_* layers provided by aiofastnet.
 
 getaddrinfo + getnameinfo provided by aiodns
 
-
-
