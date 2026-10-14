@@ -1,25 +1,23 @@
 class Future:
     _done: bool
 
-    def result(self) -> Any: ...
-
     def __await__(self):
         if not self._done:
             yield self
 
         return self.result()
 
-async def conversation():
+    def result(self) -> Any: ...
+
+async def my_coroutine():
     print("started")
     future = Future()
     await future
     return 42
 
-coro = conversation()    # create coroutine object
-future = coro.send(None) # start -> print “started” -> yield
-
+coro = my_coroutine()    # create coroutine object
 try:
-    # resume -> raises StopIteration on return
-    coro.send(None)
+    coro.send(None) # start -> print “started” -> yield
+    coro.send(None) # resume -> raises StopIteration on return
 except StopIteration as ex:
     print(ex.value) # prints "42"
