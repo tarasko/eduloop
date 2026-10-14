@@ -3,11 +3,11 @@ Minimalistic asyncio compatible event loop for educational purposes.
 
 Pure python implementation.
 
-## Future + Task 
-< 150 lines
-
 ## Loop
-< 200 lines
+~ 250 lines
+
+## Future + Task 
+~ 150 lines
 
 Transport/Protocol + Streams + sock_* layers provided by aiofastnet.
 
